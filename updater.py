@@ -3,7 +3,6 @@ import sqlite3
 import math
 import time
 
-# --- 1. ДЕКОРАТОР ---
 def measure_time(func):
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -12,7 +11,6 @@ def measure_time(func):
         return result
     return wrapper
 
-# --- 2. ООП: КЛАССЫ И КОМПОЗИЦИЯ ---
 class GeoLocation:
     def __init__(self, lat, lon, city, country):
         self.lat = float(lat) if lat else None
@@ -20,12 +18,6 @@ class GeoLocation:
         self.city, self.country = city, country
 
     def __str__(self): return f"{self.city}, {self.country}"
-    def __sub__(self, other):
-        if not isinstance(other, GeoLocation) or not self.lat or not other.lat: return None
-        R = 6371.0
-        lat1, lon1, lat2, lon2 = map(math.radians, [self.lat, self.lon, other.lat, other.lon])
-        a = math.sin((lat2-lat1)/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
-        return round(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a))), 2)
 
 class Entity:
     def __init__(self, entity_id, name):
@@ -38,9 +30,6 @@ class Laureate(Entity):
         self.birth_location = birth_location
         self.wikidata_id = wikidata_id
         self.prizes = []
-
-    def __eq__(self, other):
-        return self.id == other.id if isinstance(other, Laureate) else False
     
     @property
     def birth_year(self):
@@ -51,9 +40,13 @@ class Award:
         self.year, self.category = int(year), category
 
 class NobelPrize(Award):
-    def __init__(self, year, category, motivation, prize_amount):
+    # ДОБАВИЛИ КООРДИНАТЫ РАБОТЫ (AFFILIATION)
+    def __init__(self, year, category, motivation, prize_amount, work_lat, work_lon, work_city):
         super().__init__(year, category)
         self.motivation, self.prize_amount = motivation, prize_amount
+        self.work_lat = work_lat
+        self.work_lon = work_lon
+        self.work_city = work_city
 
 class NobelDataset:
     def __init__(self):
@@ -75,16 +68,37 @@ class NobelDataset:
             laureate = Laureate(l_id, name, item.get("gender"), birth_info.get("date"), geo_loc, item.get("wikidata", {}).get("id"))
             
             for p in item.get("nobelPrizes", []):
+                # ИЗВЛЕКАЕМ КООРДИНАТЫ ИНСТИТУТА
+                affiliations = p.get("affiliations", [])
+                w_lat, w_lon, w_city = None, None, None
+                if affiliations:
+                    city_now = affiliations[0].get("cityNow", {})
+                    w_lat = city_now.get("latitude")
+                    w_lon = city_now.get("longitude")
+                    w_city = city_now.get("en")
+
                 laureate.prizes.append(NobelPrize(
                     p.get("awardYear"), p.get("category", {}).get("en"), 
-                    p.get("motivation", {}).get("en"), p.get("prizeAmount")
+                    p.get("motivation", {}).get("en"), p.get("prizeAmount"),
+                    w_lat, w_lon, w_city
                 ))
             self.laureates.append(laureate)
 
-# --- 3. БАЗА ДАННЫХ ---
 class DatabaseManager:
     def __init__(self, db_name="nobel_database.sqlite"):
         self.db_name = db_name
+        self._init_db()
+
+    def _init_db(self):
+        # СОЗДАЕМ ТАБЛИЦЫ ЗАНОВО С НОВЫМИ КОЛОНКАМИ
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''CREATE TABLE IF NOT EXISTS laureates 
+                (id TEXT PRIMARY KEY, name TEXT, gender TEXT, birth_year INTEGER, birth_city TEXT, birth_country TEXT, lat REAL, lon REAL, wikidata_id TEXT)''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS prizes 
+                (id INTEGER PRIMARY KEY AUTOINCREMENT, laureate_id TEXT, award_year INTEGER, category TEXT, motivation TEXT, prize_amount INTEGER, 
+                work_lat REAL, work_lon REAL, work_city TEXT)''') # Добавили колонки
+            conn.commit()
 
     @measure_time
     def save_dataset(self, dataset):
@@ -95,23 +109,20 @@ class DatabaseManager:
                     INSERT OR REPLACE INTO laureates (id, name, gender, birth_year, birth_city, birth_country, lat, lon, wikidata_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (l.id, l.name, l.gender, l.birth_year, 
-                      l.birth_location.city if l.birth_location else None,
-                      l.birth_location.country if l.birth_location else None,
-                      l.birth_location.lat if l.birth_location else None,
-                      l.birth_location.lon if l.birth_location else None, l.wikidata_id))
+                      l.birth_location.city if l.birth_location else None, l.birth_location.country if l.birth_location else None,
+                      l.birth_location.lat if l.birth_location else None, l.birth_location.lon if l.birth_location else None, l.wikidata_id))
                 
                 cursor.execute('DELETE FROM prizes WHERE laureate_id = ?', (l.id,))
                 for p in l.prizes:
-                    cursor.execute('INSERT INTO prizes (laureate_id, award_year, category, motivation, prize_amount) VALUES (?, ?, ?, ?, ?)', 
-                                   (l.id, p.year, p.category, p.motivation, p.prize_amount))
+                    cursor.execute('''INSERT INTO prizes 
+                        (laureate_id, award_year, category, motivation, prize_amount, work_lat, work_lon, work_city) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+                        (l.id, p.year, p.category, p.motivation, p.prize_amount, p.work_lat, p.work_lon, p.work_city))
             conn.commit()
 
-# --- 4. СКРИПТ ПАРСИНГА И ОБНОВЛЕНИЯ ---
-@measure_time
 def fetch_nobel_laureates():
     base_url, limit, offset, all_data = "https://api.nobelprize.org/2.1/laureates", 50, 0, []
-    headers = {"User-Agent": "NobelPrize_DH_Project/1.0 (Educational)"}
-    print("Начинаем загрузку из API...")
+    headers = {"User-Agent": "NobelPrize_DH_Project/1.0"}
     while True:
         try:
             res = requests.get(base_url, params={"limit": limit, "offset": offset}, headers=headers)
@@ -121,8 +132,7 @@ def fetch_nobel_laureates():
             all_data.extend(batch)
             offset += limit
             time.sleep(0.5)
-        except Exception as e:
-            print(f"Ошибка API: {e}")
+        except Exception:
             break
     return all_data
 
@@ -133,7 +143,3 @@ if __name__ == "__main__":
         dataset.load_from_api(raw_data)
         db = DatabaseManager()
         db.save_dataset(dataset)
-        print(f"База данных успешно обновлена! Лауреатов: {len(dataset)}")
-        
-        # Задел на будущее: Если захотите бота n8n, раскомментируете эти строки и вставите URL вебхука
-        # requests.post("ВАШ_WEBHOOK_URL", json={"message": f"БД обновлена. Лауреатов: {len(dataset)}"})
