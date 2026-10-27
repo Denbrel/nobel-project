@@ -90,14 +90,18 @@ class DatabaseManager:
         self._init_db()
 
     def _init_db(self):
-        # СОЗДАЕМ ТАБЛИЦЫ ЗАНОВО С НОВЫМИ КОЛОНКАМИ
+        # ТЕПЕРЬ МЫ ПРИНУДИТЕЛЬНО УДАЛЯЕМ СТАРЫЕ ТАБЛИЦЫ
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute('''CREATE TABLE IF NOT EXISTS laureates 
+            cursor.execute('DROP TABLE IF EXISTS prizes')
+            cursor.execute('DROP TABLE IF EXISTS laureates')
+            
+            # И создаем их заново с правильными новыми колонками
+            cursor.execute('''CREATE TABLE laureates 
                 (id TEXT PRIMARY KEY, name TEXT, gender TEXT, birth_year INTEGER, birth_city TEXT, birth_country TEXT, lat REAL, lon REAL, wikidata_id TEXT)''')
-            cursor.execute('''CREATE TABLE IF NOT EXISTS prizes 
+            cursor.execute('''CREATE TABLE prizes 
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, laureate_id TEXT, award_year INTEGER, category TEXT, motivation TEXT, prize_amount INTEGER, 
-                work_lat REAL, work_lon REAL, work_city TEXT)''') # Добавили колонки
+                work_lat REAL, work_lon REAL, work_city TEXT)''')
             conn.commit()
 
     @measure_time
