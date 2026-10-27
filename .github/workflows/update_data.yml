@@ -1,0 +1,37 @@
+name: Auto Update Nobel Database
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Запускать автоматически каждый понедельник
+  workflow_dispatch: # Позволяет нам запускать скрипт вручную кнопкой
+
+permissions:
+  contents: write # Даем права на сохранение файла базы данных в репозиторий
+
+jobs:
+  update-db:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+          
+      - name: Run updater script
+        run: python updater.py
+
+      - name: Commit and push updated database
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions Bot"
+          git add nobel_database.sqlite
+          # Если изменений в БД нет, коммит не создастся (чтобы не было пустых коммитов)
+          git commit -m "Автоматическое обновление базы данных SQLite" || echo "Нет новых данных для обновления"
+          git push
